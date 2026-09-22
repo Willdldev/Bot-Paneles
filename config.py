@@ -20,14 +20,14 @@ DATABASE_URL = os.environ["DATABASE_URL"]
 # EDITA ESTO con tu propio ID de Telegram antes de desplegar (usa /chatid
 # por privado, una vez el bot esté corriendo, para obtener tu ID).
 USUARIOS_PERMITIDOS_FIJOS: dict[int, tuple[str, list[str]]] = {
-    8638593929: ("Willber De Luna", ["admin"]),
+    # 123456789: ("Willber De Luna", ["admin"]),
 }
 
 # --- Administradores ----------------------------------------------------
 # Lista separada y más pequeña. NO se puede ampliar desde Telegram ni con
 # variables de entorno — solo editando este archivo directamente.
 ADMINISTRADORES: set[int] = {
-    8638593929,
+    # 123456789,
 }
 
 
@@ -87,3 +87,30 @@ _habilitar("movimientos", VALIDACION_GROUP_ID)
 _habilitar("movimientos", ALMACEN_GROUP_ID)  # conveniencia: almacén también consulta aquí
 
 _habilitar("salida", SALIDA_GROUP_ID)
+
+# --- Descripciones para el menú de comandos de Telegram (el que sale
+# al escribir "/" en un chat) --------------------------------------
+DESCRIPCIONES_COMANDOS: dict[str, str] = {
+    "reservar": "Reservar paneles para un proyecto",
+    "pendientes": "Reservas sin confirmar en Odoo",
+    "reservas": "Ver todas las reservas activas",
+    "disponible": "Ver disponible para vender",
+    "reportar_dano": "Reportar paneles dañados",
+    "reportes_dano": "Historial de paneles dañados",
+    "entrada": "Registrar entrada de paneles",
+    "orden_pendiente": "Registrar orden aún no llegada",
+    "ordenes_pendientes": "Ver órdenes pendientes por llegar",
+    "inventario": "Ver inventario físico en almacén",
+    "movimientos": "Ver entradas y salidas de almacén",
+    "salida": "Registrar salida de paneles",
+    "cancelar": "Cancelar la operación en curso",
+    "chatid": "Ver tu ID o el del grupo",
+    "autorizar": "Dar de alta a una persona",
+    "desautorizar": "Quitar acceso a una persona",
+    "agregar_rol": "Sumar un rol a alguien",
+    "quitar_rol": "Quitar un rol a alguien",
+    "usuarios": "Ver usuarios autorizados",
+    "auditoria": "Ver registro de auditoría",
+    "ajustar": "Corregir un número de inventario",
+    "cargar_inicial": "Cargar el inventario inicial",
+}

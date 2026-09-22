@@ -1,8 +1,12 @@
 import logging
 
+from telegram import BotCommand, BotCommandScopeChat, BotCommandScopeAllPrivateChats
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters
 
-from config import BOT_TOKEN
+from config import (
+    BOT_TOKEN, DESCRIPCIONES_COMANDOS,
+    COMERCIAL_GROUP_ID, ALMACEN_GROUP_ID, VALIDACION_GROUP_ID, SALIDA_GROUP_ID, PRUEBAS_GROUP_ID,
+)
 from db import init_schema
 from security.guardian import guardian_global
 from handlers import admin, inventario, comercial, almacen, salida, danos
@@ -14,9 +18,61 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+async def _configurar_menus_comandos(application: Application):
+    """
+    Configura el menú de comandos que Telegram muestra al escribir "/"
+    — uno distinto por grupo, según lo que de verdad se puede usar ahí,
+    más uno general para chat privado (comandos de administración).
+    """
+    comandos_comercial = [
+        "reservar", "pendientes", "reservas", "disponible",
+        "reportar_dano", "reportes_dano", "cancelar", "chatid",
+    ]
+    comandos_almacen = [
+        "entrada", "orden_pendiente", "ordenes_pendientes", "inventario",
+        "movimientos", "reportar_dano", "reportes_dano", "cancelar", "chatid",
+    ]
+    comandos_validacion = ["inventario", "movimientos", "chatid"]
+    comandos_salida = ["salida", "cancelar", "chatid"]
+    # El grupo de pruebas está exento de la restricción de comando-por-grupo,
+    # así que ahí sí tiene sentido mostrarlos todos juntos.
+    comandos_pruebas = sorted(set(
+        comandos_comercial + comandos_almacen + comandos_validacion + comandos_salida
+    ))
+
+    mapa_grupos = {
+        COMERCIAL_GROUP_ID: comandos_comercial,
+        ALMACEN_GROUP_ID: comandos_almacen,
+        VALIDACION_GROUP_ID: comandos_validacion,
+        SALIDA_GROUP_ID: comandos_salida,
+        PRUEBAS_GROUP_ID: comandos_pruebas,
+    }
+
+    for grupo_id, comandos in mapa_grupos.items():
+        if grupo_id is None:
+            continue
+        lista = [BotCommand(c, DESCRIPCIONES_COMANDOS.get(c, c)) for c in comandos]
+        try:
+            await application.bot.set_my_commands(lista, scope=BotCommandScopeChat(chat_id=grupo_id))
+        except Exception:
+            logger.exception("No pude configurar el menú de comandos para el grupo %s", grupo_id)
+
+    comandos_admin = [
+        "chatid", "autorizar", "desautorizar", "agregar_rol", "quitar_rol",
+        "usuarios", "auditoria", "ajustar", "cargar_inicial",
+    ]
+    lista_admin = [BotCommand(c, DESCRIPCIONES_COMANDOS.get(c, c)) for c in comandos_admin]
+    try:
+        await application.bot.set_my_commands(lista_admin, scope=BotCommandScopeAllPrivateChats())
+    except Exception:
+        logger.exception("No pude configurar el menú de comandos privados.")
+
+
 async def _post_init(application: Application):
     await init_schema()
     logger.info("Esquema de base de datos verificado/creado.")
+    await _configurar_menus_comandos(application)
+    logger.info("Menús de comandos configurados.")
 
 
 def main():
