@@ -20,14 +20,14 @@ DATABASE_URL = os.environ["DATABASE_URL"]
 # EDITA ESTO con tu propio ID de Telegram antes de desplegar (usa /chatid
 # por privado, una vez el bot esté corriendo, para obtener tu ID).
 USUARIOS_PERMITIDOS_FIJOS: dict[int, tuple[str, list[str]]] = {
-    # 123456789: ("Willber De Luna", ["admin"]),
+    8638593929: ("Willber De Luna", ["admin"]),
 }
 
 # --- Administradores ----------------------------------------------------
 # Lista separada y más pequeña. NO se puede ampliar desde Telegram ni con
 # variables de entorno — solo editando este archivo directamente.
 ADMINISTRADORES: set[int] = {
-    # 123456789,
+    8638593929,
 }
 
 
