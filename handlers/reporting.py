@@ -1,31 +1,41 @@
 """
-Arma el resumen corto que se manda directo en el chat y el Excel de
-detalle que se ofrece a pedido (botón), para no saturar el chat cuando
-hay muchas combinaciones de marca/modelo/potencia.
+Arma el resumen corto que se manda directo en el chat (tabla
+monoespaciada) y el Excel de detalle que se ofrece a pedido, para no
+saturar el chat cuando hay muchas combinaciones de marca/modelo/potencia.
 """
 import io
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from openpyxl import Workbook
-from openpyxl.styles import Font
+from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+from openpyxl.utils import get_column_letter
 
 from db import get_pool
 
+_RELLENO_ENCABEZADO = PatternFill("solid", fgColor="1F4E78")
+_FUENTE_ENCABEZADO = Font(bold=True, color="FFFFFF")
+_BORDE_FINO = Border(*(Side(style="thin", color="D9D9D9"),) * 4)
+_FUENTE_SUBFILA = Font(italic=True, color="595959")
+_RELLENO_SUBFILA = PatternFill("solid", fgColor="F2F2F2")
 
-async def _filas_stock(conn):
-    return await conn.fetch(
-        "SELECT marca, modelo, potencia_w, en_almacen, pendiente_por_llegar, reservado, danados "
-        "FROM paneles_stock ORDER BY marca, modelo, potencia_w"
-    )
+
+def _estilizar_encabezado(ws, num_columnas: int):
+    for celda in ws[1]:
+        celda.font = _FUENTE_ENCABEZADO
+        celda.fill = _RELLENO_ENCABEZADO
+        celda.alignment = Alignment(horizontal="center", vertical="center")
+        celda.border = _BORDE_FINO
+    ws.freeze_panes = "A2"
+    ws.auto_filter.ref = f"A1:{get_column_letter(num_columnas)}1"
 
 
-async def _reservas_activas(conn, marca, modelo, potencia_w):
-    return await conn.fetch(
-        "SELECT proyecto, cantidad FROM reservas "
-        "WHERE marca=$1 AND modelo=$2 AND potencia_w=$3 AND estado_despacho != 'despachada' "
-        "ORDER BY fecha_solicitud",
-        marca, modelo, potencia_w,
-    )
+def _autoancho(ws, encabezados):
+    for i, encabezado in enumerate(encabezados, start=1):
+        letra = get_column_letter(i)
+        largo = max(
+            [len(encabezado)] + [len(str(c.value)) for c in ws[letra] if c.value is not None]
+        )
+        ws.column_dimensions[letra].width = min(largo + 3, 40)
 
 
 def _tabla(encabezados: list[str], filas: list[list], max_ancho: int = 18) -> str:
@@ -59,6 +69,22 @@ def _tabla(encabezados: list[str], filas: list[list], max_ancho: int = 18) -> st
     lineas = [_fila(encabezados), " ".join("-" * a for a in anchos)]
     lineas += [_fila(f) for f in filas_txt]
     return "```\n" + "\n".join(lineas) + "\n```"
+
+
+async def _filas_stock(conn):
+    return await conn.fetch(
+        "SELECT marca, modelo, potencia_w, en_almacen, pendiente_por_llegar, reservado, danados "
+        "FROM paneles_stock ORDER BY marca, modelo, potencia_w"
+    )
+
+
+async def _reservas_activas(conn, marca, modelo, potencia_w):
+    return await conn.fetch(
+        "SELECT proyecto, cantidad FROM reservas "
+        "WHERE marca=$1 AND modelo=$2 AND potencia_w=$3 AND estado_despacho != 'despachada' "
+        "ORDER BY fecha_solicitud",
+        marca, modelo, potencia_w,
+    )
 
 
 async def construir_reporte(vista: str):
@@ -124,26 +150,39 @@ def construir_excel(filas_reporte, vista: str) -> io.BytesIO:
     encabezados = ["Marca", "Modelo", "Potencia (W)", "En almacén"]
     if vista == "comercial":
         encabezados.append("Pendiente por llegar")
-    encabezados += ["Disponible", "Reservado", "Proyectos (reservado)"]
+    encabezados += ["Disponible", "Reservado", "Proyecto reservado"]
     if vista == "fisica":
         encabezados.append("Dañados")
+    idx_reservado = encabezados.index("Reservado")
+    idx_proyecto = encabezados.index("Proyecto reservado")
+
     ws.append(encabezados)
-    for celda in ws[1]:
-        celda.font = Font(bold=True)
 
     for f in filas_reporte:
-        proyectos_txt = ", ".join(f"{r['proyecto']} ({r['cantidad']})" for r in f["proyectos"]) or "—"
         fila = [f["marca"], f["modelo"], f["potencia_w"], f["en_almacen"]]
         if vista == "comercial":
             fila.append(f["pendiente_por_llegar"])
-        fila += [f["disponible"], f["reservado"], proyectos_txt]
+        fila += [f["disponible"], f["reservado"], ""]
         if vista == "fisica":
             fila.append(f["danados"])
         ws.append(fila)
+        for celda in ws[ws.max_row]:
+            celda.border = _BORDE_FINO
 
-    for columna in ws.columns:
-        largo = max((len(str(c.value)) if c.value is not None else 0) for c in columna)
-        ws.column_dimensions[columna[0].column_letter].width = min(largo + 2, 40)
+        # Cada proyecto reservado va en su propia fila debajo, en vez de
+        # amontonarlos todos en una sola celda.
+        for reserva in f["proyectos"]:
+            sub = [""] * len(encabezados)
+            sub[idx_proyecto] = f"↳ {reserva['proyecto']}"
+            sub[idx_reservado] = reserva["cantidad"]
+            ws.append(sub)
+            for celda in ws[ws.max_row]:
+                celda.font = _FUENTE_SUBFILA
+                celda.fill = _RELLENO_SUBFILA
+                celda.border = _BORDE_FINO
+
+    _estilizar_encabezado(ws, len(encabezados))
+    _autoancho(ws, encabezados)
 
     buffer = io.BytesIO()
     wb.save(buffer)
@@ -196,8 +235,6 @@ def construir_excel_reservas(filas) -> io.BytesIO:
         "Solicitado por", "Confirmado en Odoo", "Estado despacho", "Fecha solicitud",
     ]
     ws.append(encabezados)
-    for celda in ws[1]:
-        celda.font = Font(bold=True)
 
     for f in filas:
         ws.append([
@@ -205,10 +242,11 @@ def construir_excel_reservas(filas) -> io.BytesIO:
             f["solicitante"] or "—", "Sí" if f["estado_odoo"] == "confirmada" else "No",
             f["estado_despacho"], f["fecha_solicitud"].strftime("%Y-%m-%d %H:%M"),
         ])
+        for celda in ws[ws.max_row]:
+            celda.border = _BORDE_FINO
 
-    for columna in ws.columns:
-        largo = max((len(str(c.value)) if c.value is not None else 0) for c in columna)
-        ws.column_dimensions[columna[0].column_letter].width = min(largo + 2, 40)
+    _estilizar_encabezado(ws, len(encabezados))
+    _autoancho(ws, encabezados)
 
     buffer = io.BytesIO()
     wb.save(buffer)
@@ -259,31 +297,31 @@ def construir_excel_movimientos(entradas, salidas) -> io.BytesIO:
 
     ws1 = wb.active
     ws1.title = "Entradas"
-    ws1.append(["Fecha", "Marca", "Modelo", "Potencia (W)", "Cantidad", "Proveedor", "N° Orden", "Tipo"])
-    for celda in ws1[1]:
-        celda.font = Font(bold=True)
+    encabezados1 = ["Fecha", "Marca", "Modelo", "Potencia (W)", "Cantidad", "Proveedor", "N° Orden", "Tipo"]
+    ws1.append(encabezados1)
     for e in entradas:
         ws1.append([
             e["fecha_recepcion"].strftime("%Y-%m-%d %H:%M") if e["fecha_recepcion"] else "",
             e["marca"], e["modelo"], e["potencia_w"], e["cantidad"],
             e["proveedor"], e["numero_orden"] or "—", e["tipo_entrega"] or "—",
         ])
-    for columna in ws1.columns:
-        largo = max((len(str(c.value)) if c.value is not None else 0) for c in columna)
-        ws1.column_dimensions[columna[0].column_letter].width = min(largo + 2, 40)
+        for celda in ws1[ws1.max_row]:
+            celda.border = _BORDE_FINO
+    _estilizar_encabezado(ws1, len(encabezados1))
+    _autoancho(ws1, encabezados1)
 
     ws2 = wb.create_sheet("Salidas")
-    ws2.append(["Fecha", "Marca", "Modelo", "Potencia (W)", "Cantidad", "Destino", "Tipo", "Origen compra"])
-    for celda in ws2[1]:
-        celda.font = Font(bold=True)
+    encabezados2 = ["Fecha", "Marca", "Modelo", "Potencia (W)", "Cantidad", "Destino", "Tipo", "Origen compra"]
+    ws2.append(encabezados2)
     for s in salidas:
         ws2.append([
             s["fecha"].strftime("%Y-%m-%d %H:%M"), s["marca"], s["modelo"], s["potencia_w"],
             s["cantidad_declarada"], s["destino"], s["tipo"], s["origen_compra"],
         ])
-    for columna in ws2.columns:
-        largo = max((len(str(c.value)) if c.value is not None else 0) for c in columna)
-        ws2.column_dimensions[columna[0].column_letter].width = min(largo + 2, 40)
+        for celda in ws2[ws2.max_row]:
+            celda.border = _BORDE_FINO
+    _estilizar_encabezado(ws2, len(encabezados2))
+    _autoancho(ws2, encabezados2)
 
     buffer = io.BytesIO()
     wb.save(buffer)
