@@ -117,10 +117,12 @@ def construir_excel(filas_reporte, vista: str) -> io.BytesIO:
     return buffer
 
 
-def boton_excel(vista: str) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        [[InlineKeyboardButton("📊 Descargar detalle en Excel", callback_data=f"excel:{vista}")]]
-    )
+def teclado_formato(tipo: str) -> InlineKeyboardMarkup:
+    """Pregunta cómo quiere verlo la persona, antes de generar nada."""
+    return InlineKeyboardMarkup([[
+        InlineKeyboardButton("💬 En el chat", callback_data=f"formato:{tipo}:chat"),
+        InlineKeyboardButton("📊 En Excel", callback_data=f"formato:{tipo}:excel"),
+    ]])
 
 
 async def construir_reporte_reservas():
@@ -178,12 +180,6 @@ def construir_excel_reservas(filas) -> io.BytesIO:
     wb.save(buffer)
     buffer.seek(0)
     return buffer
-
-
-def boton_excel_reservas() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        [[InlineKeyboardButton("📊 Descargar detalle en Excel", callback_data="excel_reservas")]]
-    )
 
 
 async def construir_reporte_movimientos():
@@ -259,9 +255,3 @@ def construir_excel_movimientos(entradas, salidas) -> io.BytesIO:
     wb.save(buffer)
     buffer.seek(0)
     return buffer
-
-
-def boton_excel_movimientos() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup([[
-        InlineKeyboardButton("📊 Descargar historial completo en Excel", callback_data="excel_movimientos")
-    ]])

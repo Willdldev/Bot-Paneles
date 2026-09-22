@@ -1,50 +1,72 @@
+"""
+/inventario, /disponible, /movimientos -> primero preguntan "¿en el chat
+o en Excel?" y solo generan lo que la persona elija, en vez de mandar
+siempre el resumen y ofrecer el Excel de una vez.
+"""
 from telegram import Update, InputFile
 from telegram.ext import ContextTypes
 
 from security.groups import requiere_grupo
 from handlers.reporting import (
-    construir_reporte, construir_excel, boton_excel,
-    construir_reporte_movimientos, construir_excel_movimientos, boton_excel_movimientos,
+    construir_reporte, construir_excel,
+    construir_reporte_movimientos, construir_excel_movimientos,
+    teclado_formato,
 )
 
 
 @requiere_grupo("inventario")
 async def inventario(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Vista física: Almacén e Inventario paneles."""
-    resumen, _ = await construir_reporte("fisica")
-    await update.message.reply_text(resumen, parse_mode="Markdown", reply_markup=boton_excel("fisica"))
+    await update.message.reply_text(
+        "¿Cómo quieres ver el inventario?", reply_markup=teclado_formato("inventario")
+    )
 
 
 @requiere_grupo("disponible")
 async def disponible(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Vista comercial: incluye lo pendiente por llegar."""
-    resumen, _ = await construir_reporte("comercial")
-    await update.message.reply_text(resumen, parse_mode="Markdown", reply_markup=boton_excel("comercial"))
-
-
-async def enviar_excel_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Se dispara al tocar el botón '📊 Descargar detalle en Excel'."""
-    query = update.callback_query
-    await query.answer()
-    vista = query.data.split(":", 1)[1]
-    _, filas = await construir_reporte(vista)
-    archivo = construir_excel(filas, vista)
-    nombre = "inventario_almacen.xlsx" if vista == "fisica" else "disponible_comercial.xlsx"
-    await query.message.reply_document(InputFile(archivo, filename=nombre))
+    await update.message.reply_text(
+        "¿Cómo quieres ver el disponible?", reply_markup=teclado_formato("disponible")
+    )
 
 
 @requiere_grupo("movimientos")
 async def movimientos(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Entradas y salidas de almacén — historial de ordenes_compra recibidas y despachos."""
-    resumen, _, _ = await construir_reporte_movimientos()
+    """Entradas y salidas de almacén."""
     await update.message.reply_text(
-        resumen, parse_mode="Markdown", reply_markup=boton_excel_movimientos()
+        "¿Cómo quieres ver los movimientos?", reply_markup=teclado_formato("movimientos")
     )
 
 
-async def enviar_excel_movimientos_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def responder_formato_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Atiende el botón elegido para /inventario, /disponible y /movimientos."""
     query = update.callback_query
     await query.answer()
-    _, entradas, salidas = await construir_reporte_movimientos()
-    archivo = construir_excel_movimientos(entradas, salidas)
-    await query.message.reply_document(InputFile(archivo, filename="movimientos_almacen.xlsx"))
+    _, tipo, formato = query.data.split(":")
+
+    if tipo == "inventario":
+        resumen, filas = await construir_reporte("fisica")
+        if formato == "chat":
+            await query.edit_message_text(resumen, parse_mode="Markdown")
+        else:
+            archivo = construir_excel(filas, "fisica")
+            await query.edit_message_text("📊 Aquí tienes el detalle en Excel:")
+            await query.message.reply_document(InputFile(archivo, filename="inventario_almacen.xlsx"))
+
+    elif tipo == "disponible":
+        resumen, filas = await construir_reporte("comercial")
+        if formato == "chat":
+            await query.edit_message_text(resumen, parse_mode="Markdown")
+        else:
+            archivo = construir_excel(filas, "comercial")
+            await query.edit_message_text("📊 Aquí tienes el detalle en Excel:")
+            await query.message.reply_document(InputFile(archivo, filename="disponible_comercial.xlsx"))
+
+    elif tipo == "movimientos":
+        resumen, entradas, salidas = await construir_reporte_movimientos()
+        if formato == "chat":
+            await query.edit_message_text(resumen, parse_mode="Markdown")
+        else:
+            archivo = construir_excel_movimientos(entradas, salidas)
+            await query.edit_message_text("📊 Aquí tienes el historial completo en Excel:")
+            await query.message.reply_document(InputFile(archivo, filename="movimientos_almacen.xlsx"))

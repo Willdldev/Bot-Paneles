@@ -15,7 +15,7 @@ from telegram.ext import (
 from security.groups import requiere_grupo, requiere_rol
 from security.auth import tiene_alguno_de
 from db import get_pool
-from handlers.reporting import construir_reporte_reservas, construir_excel_reservas, boton_excel_reservas
+from handlers.reporting import construir_reporte_reservas, construir_excel_reservas, teclado_formato
 
 MARCA, MODELO, POTENCIA, CANTIDAD, PROYECTO, CONFIRMAR = range(6)
 
@@ -243,16 +243,23 @@ async def pendientes(update: Update, context: ContextTypes.DEFAULT_TYPE):
 @requiere_grupo("reservas")
 async def reservas(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Lista todas las reservas activas (no solo las pendientes de Odoo)."""
-    resumen, _ = await construir_reporte_reservas()
-    await update.message.reply_text(resumen, parse_mode="Markdown", reply_markup=boton_excel_reservas())
+    await update.message.reply_text(
+        "¿Cómo quieres ver las reservas?", reply_markup=teclado_formato("reservas")
+    )
 
 
-async def enviar_excel_reservas_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def responder_formato_reservas_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    _, filas = await construir_reporte_reservas()
-    archivo = construir_excel_reservas(filas)
-    await query.message.reply_document(InputFile(archivo, filename="reservas_activas.xlsx"))
+    _, _tipo, formato = query.data.split(":")
+
+    resumen, filas = await construir_reporte_reservas()
+    if formato == "chat":
+        await query.edit_message_text(resumen, parse_mode="Markdown")
+    else:
+        archivo = construir_excel_reservas(filas)
+        await query.edit_message_text("📊 Aquí tienes el detalle en Excel:")
+        await query.message.reply_document(InputFile(archivo, filename="reservas_activas.xlsx"))
 
 
 def construir_conversation_handler() -> ConversationHandler:
