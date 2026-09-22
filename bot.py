@@ -37,6 +37,7 @@ def main():
     application.add_handler(CommandHandler("usuarios", admin.usuarios))
     application.add_handler(CommandHandler("auditoria", admin.auditoria))
     application.add_handler(CommandHandler("ajustar", admin.ajustar))
+    application.add_handler(CommandHandler("cargar_inicial", admin.cargar_inicial))
 
     # --- Inventario paneles (Grupo 3) y vista comercial (Grupo 1) ----
     application.add_handler(CommandHandler("inventario", inventario.inventario))
