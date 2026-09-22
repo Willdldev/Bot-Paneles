@@ -4,6 +4,7 @@ from telegram.ext import ContextTypes
 from config import ADMINISTRADORES, USUARIOS_PERMITIDOS_FIJOS
 from db import get_pool
 from security.audit import registrar_intento
+from seed_inicial import PANELES_STOCK, RESERVAS
 
 
 def _solo_privado(func):
@@ -308,4 +309,56 @@ async def ajustar(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text(
         f"✅ {marca} {modelo} {potencia}W — {campo}: {valor_anterior} → {nuevo_valor}\nMotivo: {motivo}"
+    )
+
+
+@_solo_privado
+@_solo_admin
+async def cargar_inicial(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Carga el inventario inicial (paneles_stock + reservas) directo desde
+    el bot, sin necesitar la Consola ni el CLI de Railway. Es solo para
+    la primera carga, una sola vez — trae el mismo seguro que
+    seed_inicial.py: si ya hay reservas, se niega a menos que se le
+    pase "forzar".
+    """
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        existentes = await conn.fetchval("SELECT COUNT(*) FROM reservas")
+
+    forzar = bool(context.args) and context.args[0].lower() == "forzar"
+    if existentes and not forzar:
+        await update.message.reply_text(
+            f"Ya hay {existentes} reserva(s) en la base de datos. Esto es solo para la carga "
+            "inicial, una sola vez — correrlo de nuevo duplicaría reservas. Si de verdad quieres "
+            "forzarlo, escribe: /cargar_inicial forzar"
+        )
+        return
+
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            for marca, modelo, potencia, en_almacen, pendiente, reservado in PANELES_STOCK:
+                await conn.execute(
+                    """
+                    INSERT INTO paneles_stock
+                        (marca, modelo, potencia_w, en_almacen, pendiente_por_llegar, reservado)
+                    VALUES ($1, $2, $3, $4, $5, $6)
+                    ON CONFLICT (marca, modelo, potencia_w) DO UPDATE
+                    SET en_almacen = $4, pendiente_por_llegar = $5, reservado = $6
+                    """,
+                    marca, modelo, potencia, en_almacen, pendiente, reservado,
+                )
+            for marca, modelo, potencia, cantidad, proyecto in RESERVAS:
+                await conn.execute(
+                    """
+                    INSERT INTO reservas
+                        (marca, modelo, potencia_w, cantidad, proyecto, estado_odoo, estado_despacho)
+                    VALUES ($1, $2, $3, $4, $5, 'confirmada', 'pendiente')
+                    """,
+                    marca, modelo, potencia, cantidad, proyecto,
+                )
+
+    await update.message.reply_text(
+        f"✅ Cargados {len(PANELES_STOCK)} SKUs y {len(RESERVAS)} reservas.\n"
+        "Verifica con /inventario y /disponible."
     )
