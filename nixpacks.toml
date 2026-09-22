@@ -1,0 +1,6 @@
+# Railway usa Nixpacks para construir el proyecto automáticamente a
+# partir de requirements.txt. pytesseract es solo un envoltorio en
+# Python — necesita el binario real de Tesseract instalado en el
+# sistema, y esta es la forma de pedírselo a Nixpacks.
+[phases.setup]
+aptPkgs = ["tesseract-ocr"]
