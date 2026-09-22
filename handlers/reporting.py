@@ -28,6 +28,39 @@ async def _reservas_activas(conn, marca, modelo, potencia_w):
     )
 
 
+def _tabla(encabezados: list[str], filas: list[list], max_ancho: int = 18) -> str:
+    """
+    Arma una tabla en texto monoespaciado (dentro de un bloque ``` para
+    que Telegram la muestre con fuente de ancho fijo y las columnas
+    queden alineadas). Las columnas donde todos los valores son
+    numéricos se alinean a la derecha; el resto, a la izquierda.
+    """
+    filas_txt = [[str(v) for v in fila] for fila in filas]
+
+    anchos = []
+    alinear_derecha = []
+    for i, encabezado in enumerate(encabezados):
+        valores_col = [f[i] for f in filas_txt]
+        ancho = max([len(encabezado)] + [min(len(v), max_ancho) for v in valores_col])
+        anchos.append(ancho)
+        es_numerica = bool(valores_col) and all(
+            v.lstrip("-").isdigit() for v in valores_col
+        )
+        alinear_derecha.append(es_numerica)
+
+    def _celda(valor: str, ancho: int, derecha: bool) -> str:
+        if len(valor) > ancho:
+            valor = valor[: ancho - 1] + "…"
+        return valor.rjust(ancho) if derecha else valor.ljust(ancho)
+
+    def _fila(valores: list[str]) -> str:
+        return " ".join(_celda(v, a, d) for v, a, d in zip(valores, anchos, alinear_derecha))
+
+    lineas = [_fila(encabezados), " ".join("-" * a for a in anchos)]
+    lineas += [_fila(f) for f in filas_txt]
+    return "```\n" + "\n".join(lineas) + "\n```"
+
+
 async def construir_reporte(vista: str):
     """
     vista='fisica'    -> lo que hay en la bodega ya mismo (Almacén / Inventario paneles):
@@ -64,22 +97,23 @@ async def construir_reporte(vista: str):
     if not filas_reporte:
         return "No hay paneles registrados todavía.", filas_reporte
 
-    lineas = ["📦 *Inventario físico*" if vista == "fisica" else "🟢 *Disponible para vender*", ""]
-    for f in filas_reporte:
-        if vista == "fisica":
-            danados_txt = f" | Dañados: {f['danados']}" if f["danados"] else ""
-            lineas.append(
-                f"• {f['marca']} {f['modelo']} {f['potencia_w']}W — "
-                f"En almacén: {f['en_almacen']} | Disponible: {f['disponible']} | "
-                f"Reservado: {f['reservado']}{danados_txt}"
-            )
-        else:
-            lineas.append(
-                f"• {f['marca']} {f['modelo']} {f['potencia_w']}W — "
-                f"Disponible: {f['disponible']} | Reservado: {f['reservado']}"
-            )
+    if vista == "fisica":
+        titulo = "📦 *Inventario físico*"
+        encabezados = ["Marca", "Modelo", "Pot", "Almac", "Disp", "Reserv", "Dañ"]
+        filas_tabla = [
+            [f["marca"], f["modelo"], f["potencia_w"], f["en_almacen"],
+             f["disponible"], f["reservado"], f["danados"]]
+            for f in filas_reporte
+        ]
+    else:
+        titulo = "🟢 *Disponible para vender*"
+        encabezados = ["Marca", "Modelo", "Pot", "Disp", "Reserv"]
+        filas_tabla = [
+            [f["marca"], f["modelo"], f["potencia_w"], f["disponible"], f["reservado"]]
+            for f in filas_reporte
+        ]
 
-    return "\n".join(lineas), filas_reporte
+    return f"{titulo}\n{_tabla(encabezados, filas_tabla)}", filas_reporte
 
 
 def construir_excel(filas_reporte, vista: str) -> io.BytesIO:
