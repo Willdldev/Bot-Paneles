@@ -41,12 +41,12 @@ def main():
     # --- Inventario paneles (Grupo 3) y vista comercial (Grupo 1) ----
     application.add_handler(CommandHandler("inventario", inventario.inventario))
     application.add_handler(CommandHandler("disponible", inventario.disponible))
-    application.add_handler(
-        CallbackQueryHandler(inventario.enviar_excel_callback, pattern="^excel:")
-    )
     application.add_handler(CommandHandler("movimientos", inventario.movimientos))
     application.add_handler(
-        CallbackQueryHandler(inventario.enviar_excel_movimientos_callback, pattern="^excel_movimientos$")
+        CallbackQueryHandler(
+            inventario.responder_formato_callback,
+            pattern="^formato:(inventario|disponible|movimientos):",
+        )
     )
 
     # --- Reservar Paneles (Grupo 1) -----------------------------------
@@ -57,7 +57,7 @@ def main():
         CallbackQueryHandler(comercial.confirmar_odoo_callback, pattern="^odoo_confirmar:")
     )
     application.add_handler(
-        CallbackQueryHandler(comercial.enviar_excel_reservas_callback, pattern="^excel_reservas$")
+        CallbackQueryHandler(comercial.responder_formato_reservas_callback, pattern="^formato:reservas:")
     )
 
     # --- Entrada paneles almacén (Grupo 2) ----------------------------
