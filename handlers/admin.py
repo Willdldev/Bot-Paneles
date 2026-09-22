@@ -27,8 +27,18 @@ def _solo_admin(func):
 
 
 async def chatid(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Único comando abierto, sin autorización previa. Solo revela el ID de quien pregunta."""
-    await update.message.reply_text(f"Tu ID de Telegram es: {update.effective_user.id}")
+    """Único comando abierto, sin autorización previa.
+    En privado: muestra el ID de la persona.
+    En un grupo: muestra el ID de la persona Y el del grupo."""
+    usuario = update.effective_user
+    chat = update.effective_chat
+    if chat.type == "private":
+        await update.message.reply_text(f"Tu ID de Telegram es: {usuario.id}")
+    else:
+        await update.message.reply_text(
+            f"Tu ID de Telegram es: {usuario.id}\n"
+            f"El ID de este grupo es: {chat.id}"
+        )
 
 
 @_solo_privado
