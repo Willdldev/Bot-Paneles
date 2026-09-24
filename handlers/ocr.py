@@ -1,13 +1,15 @@
 """
-Lee el número de serie de la foto de una etiqueta de panel usando
-Tesseract — OCR libre y gratuito que corre localmente, sin ninguna API
-de pago.
+Lee el número de serie de la foto de una etiqueta de panel.
 
-Nota importante: Tesseract lee bastante peor que un modelo de visión en
-fotos reales de celular (ángulos, reflejos de la etiqueta, texto pequeño
-junto a un código de barras). El flujo de /salida ya contempla pedir que
-se repita la foto, y también permite escribir la serie a mano si la
-lectura automática sigue fallando — revisa handlers/salida.py.
+Primero intenta decodificar el código de barras directamente (pyzbar,
+sobre la librería ZBar) — es mucho más confiable que leer el texto
+impreso, porque no depende de reconocer letras/números, solo de
+detectar el patrón de barras. Funciona incluso con bastante ruido
+alrededor (fondo, otros objetos, poca luz).
+
+Si la etiqueta no tiene código de barras legible (dañado, foto muy
+mala, ángulo imposible), cae de respaldo a leer el texto impreso con
+Tesseract — más débil, pero mejor que nada.
 """
 import io
 import logging
@@ -15,12 +17,12 @@ import re
 
 import pytesseract
 from PIL import Image, ImageOps, ImageFilter
+from pyzbar.pyzbar import decode as decodificar_barras
 
 logger = logging.getLogger(__name__)
 
 # Un número de serie de panel suele ser una cadena alfanumérica larga,
-# sin espacios. Ajusta este patrón si tus paneles usan otro formato
-# (por ejemplo, si siempre empiezan con letras fijas de la marca).
+# sin espacios. Ajusta este patrón si tus paneles usan otro formato.
 _PATRON_SERIAL = re.compile(r"[A-Z0-9]{8,}")
 
 
@@ -48,20 +50,28 @@ def _mejor_candidato(texto: str) -> str | None:
 
 async def extraer_serie(imagen_bytes: bytes) -> str | None:
     """Devuelve el número de serie en mayúsculas, o None si no se pudo
-    leer con confianza en ninguno de los modos probados."""
+    leer con confianza (ni por código de barras ni por texto)."""
     try:
         imagen = Image.open(io.BytesIO(imagen_bytes))
-        imagen = _preprocesar(imagen)
 
+        # 1) Código de barras primero — mucho más confiable.
+        codigos = decodificar_barras(imagen)
+        if codigos:
+            valor = codigos[0].data.decode("utf-8", errors="ignore").strip().upper()
+            if valor:
+                return valor
+
+        # 2) Respaldo: leer el texto impreso con Tesseract, probando
+        # varios modos de segmentación (una etiqueta con código de
+        # barras + texto no es un bloque uniforme).
+        imagen_prep = _preprocesar(imagen)
         mejor = None
-        # Prueba varios modos de segmentación de Tesseract, porque una
-        # etiqueta con código de barras + texto no es un bloque uniforme.
         for psm in (6, 11, 7):
-            texto = pytesseract.image_to_string(imagen, config=f"--psm {psm}")
+            texto = pytesseract.image_to_string(imagen_prep, config=f"--psm {psm}")
             candidato = _mejor_candidato(texto)
             if candidato and (mejor is None or len(candidato) > len(mejor)):
                 mejor = candidato
         return mejor
     except Exception:
-        logger.exception("Fallo leyendo la serie con Tesseract.")
+        logger.exception("Fallo leyendo la serie del panel.")
         return None
