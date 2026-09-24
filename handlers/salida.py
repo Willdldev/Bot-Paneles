@@ -76,29 +76,86 @@ async def salida_fecha(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text('No entendí esa fecha. Usa DD/MM/AAAA o escribe "hoy".')
         return S_FECHA
     context.user_data["salida"]["fecha"] = fecha
-    await update.message.reply_text("¿Marca del panel?")
+
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        filas = await conn.fetch("SELECT DISTINCT marca FROM paneles_stock ORDER BY marca")
+    marcas = [f["marca"] for f in filas]
+    if not marcas:
+        await update.message.reply_text(
+            "No hay ninguna marca registrada en el inventario todavía. Usa /entrada para cargar stock primero."
+        )
+        context.user_data.pop("salida", None)
+        return ConversationHandler.END
+
+    context.user_data["salida"]["_marcas_opciones"] = marcas
+    botones = [[InlineKeyboardButton(m, callback_data=f"smarca_{i}")] for i, m in enumerate(marcas)]
+    await update.message.reply_text("¿Marca del panel?", reply_markup=InlineKeyboardMarkup(botones))
     return S_MARCA
 
 
 async def salida_marca(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data["salida"]["marca"] = update.message.text.strip()
-    await update.message.reply_text("¿Modelo?")
+    query = update.callback_query
+    await query.answer()
+    idx = int(query.data.split("_", 1)[1])
+    marca = context.user_data["salida"]["_marcas_opciones"][idx]
+    context.user_data["salida"]["marca"] = marca
+    context.user_data["salida"].pop("_marcas_opciones", None)
+
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        filas = await conn.fetch(
+            "SELECT DISTINCT modelo FROM paneles_stock WHERE marca = $1 ORDER BY modelo", marca
+        )
+    modelos = [f["modelo"] for f in filas]
+    context.user_data["salida"]["_modelos_opciones"] = modelos
+    botones = [[InlineKeyboardButton(m, callback_data=f"smodelo_{i}")] for i, m in enumerate(modelos)]
+    await query.edit_message_text(f"Marca: {marca}\n\n¿Modelo?", reply_markup=InlineKeyboardMarkup(botones))
     return S_MODELO
 
 
 async def salida_modelo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data["salida"]["modelo"] = update.message.text.strip()
-    await update.message.reply_text("¿Potencia en W?")
+    query = update.callback_query
+    await query.answer()
+    idx = int(query.data.split("_", 1)[1])
+    modelo = context.user_data["salida"]["_modelos_opciones"][idx]
+    marca = context.user_data["salida"]["marca"]
+    context.user_data["salida"]["modelo"] = modelo
+    context.user_data["salida"].pop("_modelos_opciones", None)
+
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        filas = await conn.fetch(
+            "SELECT DISTINCT potencia_w FROM paneles_stock WHERE marca = $1 AND modelo = $2 ORDER BY potencia_w",
+            marca, modelo,
+        )
+    potencias = [f["potencia_w"] for f in filas]
+
+    if len(potencias) == 1:
+        context.user_data["salida"]["potencia"] = potencias[0]
+        await query.edit_message_text(
+            f"Marca: {marca}\nModelo: {modelo}\nPotencia: {potencias[0]}W\n\n¿Cantidad a despachar?"
+        )
+        return S_CANTIDAD
+
+    context.user_data["salida"]["_potencias_opciones"] = potencias
+    botones = [[InlineKeyboardButton(f"{p}W", callback_data=f"spot_{i}")] for i, p in enumerate(potencias)]
+    await query.edit_message_text(f"Marca: {marca}\nModelo: {modelo}\n\n¿Potencia?", reply_markup=InlineKeyboardMarkup(botones))
     return S_POTENCIA
 
 
 async def salida_potencia(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    texto = update.message.text.strip()
-    if not texto.isdigit():
-        await update.message.reply_text("Escribe solo el número de potencia, ej. 550")
-        return S_POTENCIA
-    context.user_data["salida"]["potencia"] = int(texto)
-    await update.message.reply_text("¿Cantidad a despachar?")
+    query = update.callback_query
+    await query.answer()
+    idx = int(query.data.split("_", 1)[1])
+    datos = context.user_data["salida"]
+    potencia = datos["_potencias_opciones"][idx]
+    datos["potencia"] = potencia
+    datos.pop("_potencias_opciones", None)
+
+    await query.edit_message_text(
+        f"Marca: {datos['marca']}\nModelo: {datos['modelo']}\nPotencia: {potencia}W\n\n¿Cantidad a despachar?"
+    )
     return S_CANTIDAD
 
 
@@ -510,9 +567,9 @@ def construir_salida_handler() -> ConversationHandler:
         entry_points=[CommandHandler("salida", salida_inicio)],
         states={
             S_FECHA: [MessageHandler(filters.TEXT & ~filters.COMMAND, salida_fecha)],
-            S_MARCA: [MessageHandler(filters.TEXT & ~filters.COMMAND, salida_marca)],
-            S_MODELO: [MessageHandler(filters.TEXT & ~filters.COMMAND, salida_modelo)],
-            S_POTENCIA: [MessageHandler(filters.TEXT & ~filters.COMMAND, salida_potencia)],
+            S_MARCA: [CallbackQueryHandler(salida_marca, pattern="^smarca_")],
+            S_MODELO: [CallbackQueryHandler(salida_modelo, pattern="^smodelo_")],
+            S_POTENCIA: [CallbackQueryHandler(salida_potencia, pattern="^spot_")],
             S_CANTIDAD: [MessageHandler(filters.TEXT & ~filters.COMMAND, salida_cantidad)],
             S_DESTINO: [MessageHandler(filters.TEXT & ~filters.COMMAND, salida_destino)],
             S_RESERVA_CONFIRMA: [CallbackQueryHandler(salida_reserva_confirma, pattern="^sresc_")],
