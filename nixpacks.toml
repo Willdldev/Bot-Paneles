@@ -3,4 +3,4 @@
 # Python — necesita el binario real de Tesseract instalado en el
 # sistema, y esta es la forma de pedírselo a Nixpacks.
 [phases.setup]
-aptPkgs = ["tesseract-ocr", "libzbar0"]
+aptPkgs = ["tesseract-ocr", "libzbar0t64"]
