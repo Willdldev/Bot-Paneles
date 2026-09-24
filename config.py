@@ -71,6 +71,7 @@ def _habilitar(comando: str, grupo_id: int | None):
 _habilitar("reservar", COMERCIAL_GROUP_ID)
 _habilitar("pendientes", COMERCIAL_GROUP_ID)
 _habilitar("reservas", COMERCIAL_GROUP_ID)
+_habilitar("reserva", COMERCIAL_GROUP_ID)
 _habilitar("disponible", COMERCIAL_GROUP_ID)  # vista comercial: incluye pendiente por llegar
 _habilitar("reportar_dano", COMERCIAL_GROUP_ID)
 _habilitar("reportes_dano", COMERCIAL_GROUP_ID)
@@ -81,12 +82,17 @@ _habilitar("ordenes_pendientes", ALMACEN_GROUP_ID)
 _habilitar("inventario", ALMACEN_GROUP_ID)  # conveniencia: almacén también consulta aquí
 _habilitar("reportar_dano", ALMACEN_GROUP_ID)
 _habilitar("reportes_dano", ALMACEN_GROUP_ID)
+_habilitar("reservas", ALMACEN_GROUP_ID)  # conveniencia: logística ve qué queda reservado
+_habilitar("reserva", ALMACEN_GROUP_ID)
 
 _habilitar("inventario", VALIDACION_GROUP_ID)
 _habilitar("movimientos", VALIDACION_GROUP_ID)
 _habilitar("movimientos", ALMACEN_GROUP_ID)  # conveniencia: almacén también consulta aquí
+_habilitar("reservas", VALIDACION_GROUP_ID)  # conveniencia: logística ve qué queda reservado
+_habilitar("reserva", VALIDACION_GROUP_ID)
 
 _habilitar("salida", SALIDA_GROUP_ID)
+_habilitar("reserva", SALIDA_GROUP_ID)  # conveniencia: logística también consulta aquí
 
 # --- Descripciones para el menú de comandos de Telegram (el que sale
 # al escribir "/" en un chat) --------------------------------------
@@ -94,6 +100,7 @@ DESCRIPCIONES_COMANDOS: dict[str, str] = {
     "reservar": "Reservar paneles para un proyecto",
     "pendientes": "Reservas sin confirmar en Odoo",
     "reservas": "Ver todas las reservas activas",
+    "reserva": "Ver detalle y series despachadas de una reserva",
     "disponible": "Ver disponible para vender",
     "reportar_dano": "Reportar paneles dañados",
     "reportes_dano": "Historial de paneles dañados",

@@ -26,15 +26,15 @@ async def _configurar_menus_comandos(application: Application):
     más uno general para chat privado (comandos de administración).
     """
     comandos_comercial = [
-        "reservar", "pendientes", "reservas", "disponible",
+        "reservar", "pendientes", "reservas", "reserva", "disponible",
         "reportar_dano", "reportes_dano", "cancelar", "chatid",
     ]
     comandos_almacen = [
         "entrada", "orden_pendiente", "ordenes_pendientes", "inventario",
-        "movimientos", "reportar_dano", "reportes_dano", "cancelar", "chatid",
+        "movimientos", "reservas", "reserva", "reportar_dano", "reportes_dano", "cancelar", "chatid",
     ]
-    comandos_validacion = ["inventario", "movimientos", "chatid"]
-    comandos_salida = ["salida", "cancelar", "chatid"]
+    comandos_validacion = ["inventario", "movimientos", "reservas", "reserva", "chatid"]
+    comandos_salida = ["salida", "reserva", "cancelar", "chatid"]
     # El grupo de pruebas está exento de la restricción de comando-por-grupo,
     # así que ahí sí tiene sentido mostrarlos todos juntos.
     comandos_pruebas = sorted(set(
@@ -115,6 +115,7 @@ def main():
     application.add_handler(comercial.construir_conversation_handler())
     application.add_handler(CommandHandler("pendientes", comercial.pendientes))
     application.add_handler(CommandHandler("reservas", comercial.reservas))
+    application.add_handler(CommandHandler("reserva", comercial.reserva_detalle))
     application.add_handler(
         CallbackQueryHandler(comercial.confirmar_odoo_callback, pattern="^odoo_confirmar:")
     )
