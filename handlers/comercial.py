@@ -240,6 +240,55 @@ async def pendientes(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("\n".join(lineas), parse_mode="Markdown")
 
 
+@requiere_grupo("reserva")
+async def reserva_detalle(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Detalle de una reserva puntual: cuánto se ha despachado, cuánto
+    falta, y las series exactas ya despachadas contra esa reserva."""
+    if not context.args or not context.args[0].isdigit():
+        await update.message.reply_text("Usa /reserva seguido del número, ej. /reserva 42")
+        return
+    reserva_id = int(context.args[0])
+
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        reserva = await conn.fetchrow(
+            "SELECT id, marca, modelo, potencia_w, cantidad, proyecto, estado_odoo, estado_despacho "
+            "FROM reservas WHERE id = $1",
+            reserva_id,
+        )
+        if reserva is None:
+            await update.message.reply_text(f"No existe ninguna reserva #{reserva_id}.")
+            return
+
+        despachado = await conn.fetchval(
+            "SELECT COALESCE(SUM(cantidad_declarada), 0) FROM despachos WHERE reserva_id = $1",
+            reserva_id,
+        )
+        series = await conn.fetch(
+            "SELECT sp.serial, d.fecha FROM series_panel sp "
+            "JOIN despachos d ON d.id = sp.despacho_id "
+            "WHERE d.reserva_id = $1 ORDER BY d.fecha, sp.serial",
+            reserva_id,
+        )
+
+    faltan = reserva["cantidad"] - despachado
+    lineas = [
+        f"*Reserva #{reserva['id']}* — {reserva['cantidad']} × {reserva['marca']} {reserva['modelo']} "
+        f"{reserva['potencia_w']}W — {reserva['proyecto']}",
+        "",
+        f"Despachado: {despachado}/{reserva['cantidad']}   ·   Faltan: {faltan}",
+    ]
+    if series:
+        lineas.append("")
+        lineas.append("Series ya despachadas:")
+        lineas.extend(f"• {s['serial']} ({s['fecha']:%d/%m/%Y})" for s in series)
+    else:
+        lineas.append("")
+        lineas.append("Todavía no se ha despachado ninguna serie de esta reserva.")
+
+    await update.message.reply_text("\n".join(lineas), parse_mode="Markdown")
+
+
 @requiere_grupo("reservas")
 async def reservas(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Lista todas las reservas activas (no solo las pendientes de Odoo)."""
