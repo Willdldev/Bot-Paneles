@@ -7,7 +7,7 @@ from config import (
     BOT_TOKEN, DESCRIPCIONES_COMANDOS,
     COMERCIAL_GROUP_ID, ALMACEN_GROUP_ID, VALIDACION_GROUP_ID, SALIDA_GROUP_ID, PRUEBAS_GROUP_ID,
 )
-from db import init_schema
+from db import init_schema, sembrar_usuarios_fijos
 from handlers.ocr import precargar_lector
 from security.guardian import guardian_global
 from handlers import admin, inventario, comercial, almacen, salida, danos
@@ -72,6 +72,8 @@ async def _configurar_menus_comandos(application: Application):
 async def _post_init(application: Application):
     await init_schema()
     logger.info("Esquema de base de datos verificado/creado.")
+    await sembrar_usuarios_fijos()
+    logger.info("Usuarios fijos del código sincronizados con la tabla usuarios.")
     await _configurar_menus_comandos(application)
     logger.info("Menús de comandos configurados.")
     await precargar_lector()
