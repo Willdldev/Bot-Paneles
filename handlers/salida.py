@@ -38,10 +38,11 @@ from handlers.ocr import extraer_serie
 logger = logging.getLogger(__name__)
 
 (
-    S_FECHA, S_MARCA, S_MODELO, S_POTENCIA, S_CANTIDAD, S_DESTINO,
+    S_FECHA, S_MARCA, S_MODELO, S_POTENCIA, S_CANTIDAD,
+    S_DESTINO_RESERVADO, S_DESTINO_PROYECTO, S_DESTINO_TEXTO,
     S_RESERVA_CONFIRMA, S_RESERVA_ELEGIR, S_TIPO, S_DIRECTA_PROVEEDOR, S_DIRECTA_ORDEN,
     S_ORIGEN, S_FOTOS, S_CONFIRMAR,
-) = range(14)
+) = range(16)
 
 _TECLADO_TIPO = InlineKeyboardMarkup([[
     InlineKeyboardButton("Sale de almacén", callback_data="stipo_almacen"),
@@ -160,20 +161,70 @@ async def salida_potencia(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return S_CANTIDAD
 
 
+_TECLADO_RESERVADO = InlineKeyboardMarkup([[
+    InlineKeyboardButton("Sí", callback_data="sreservado_si"),
+    InlineKeyboardButton("No", callback_data="sreservado_no"),
+]])
+
+
 async def salida_cantidad(update: Update, context: ContextTypes.DEFAULT_TYPE):
     texto = update.message.text.strip()
     if not texto.isdigit() or int(texto) <= 0:
         await update.message.reply_text("Escribe un número entero mayor a 0.")
         return S_CANTIDAD
     context.user_data["salida"]["cantidad"] = int(texto)
-    await update.message.reply_text("¿Hacia dónde va (destino / proyecto)?")
-    return S_DESTINO
+    await update.message.reply_text(
+        "¿Estos paneles ya estaban reservados con anterioridad?", reply_markup=_TECLADO_RESERVADO
+    )
+    return S_DESTINO_RESERVADO
 
 
-async def salida_destino(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def salida_destino_reservado(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
     datos = context.user_data["salida"]
-    datos["destino"] = update.message.text.strip()
 
+    if query.data == "sreservado_no":
+        datos["reserva_id"] = None
+        await query.edit_message_text("¿Hacia dónde va (destino / proyecto)?")
+        return S_DESTINO_TEXTO
+
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        filas = await conn.fetch(
+            "SELECT DISTINCT proyecto FROM reservas WHERE marca ILIKE $1 AND modelo ILIKE $2 "
+            "AND potencia_w = $3 AND estado_despacho != 'despachada' ORDER BY proyecto",
+            datos["marca"], datos["modelo"], datos["potencia"],
+        )
+    proyectos = [f["proyecto"] for f in filas]
+
+    if not proyectos:
+        datos["reserva_id"] = None
+        await query.edit_message_text(
+            "No encontré ninguna reserva pendiente para esta marca/modelo/potencia.\n\n"
+            "¿Hacia dónde va (destino / proyecto)?"
+        )
+        return S_DESTINO_TEXTO
+
+    datos["_proyectos_opciones"] = proyectos
+    botones = [[InlineKeyboardButton(p, callback_data=f"sproy_{i}")] for i, p in enumerate(proyectos)]
+    await query.edit_message_text(
+        "¿A cuál proyecto reservado corresponde?", reply_markup=InlineKeyboardMarkup(botones)
+    )
+    return S_DESTINO_PROYECTO
+
+
+async def salida_destino_proyecto(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    datos = context.user_data["salida"]
+    idx = int(query.data.split("_", 1)[1])
+    datos["destino"] = datos["_proyectos_opciones"][idx]
+    datos.pop("_proyectos_opciones", None)
+
+    # El nombre vino directo de una reserva existente, así que esta
+    # búsqueda siempre debería encontrar al menos una — a diferencia de
+    # cuando el destino se escribía a mano y podía no coincidir exacto.
     pool = await get_pool()
     async with pool.acquire() as conn:
         candidatas = await conn.fetch(
@@ -182,15 +233,6 @@ async def salida_destino(update: Update, context: ContextTypes.DEFAULT_TYPE):
             datos["marca"], datos["modelo"], datos["potencia"], datos["destino"],
         )
 
-    if not candidatas:
-        datos["reserva_id"] = None
-        await update.message.reply_text(
-            "No encontré una reserva activa para este destino con esa marca/modelo/potencia — "
-            "se descontará directo del disponible."
-        )
-        await update.message.reply_text("¿Sale de almacén o es entrega directa?", reply_markup=_TECLADO_TIPO)
-        return S_TIPO
-
     if len(candidatas) == 1:
         reserva = candidatas[0]
         datos["_reserva_candidata"] = reserva["id"]
@@ -198,7 +240,7 @@ async def salida_destino(update: Update, context: ContextTypes.DEFAULT_TYPE):
             InlineKeyboardButton("Sí", callback_data="sresc_si"),
             InlineKeyboardButton("No", callback_data="sresc_no"),
         ]])
-        await update.message.reply_text(
+        await query.edit_message_text(
             f"Encontré la reserva #{reserva['id']} activa para este destino ({reserva['cantidad']} "
             "paneles). ¿Esta salida corresponde a esa reserva?",
             reply_markup=teclado,
@@ -206,11 +248,18 @@ async def salida_destino(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return S_RESERVA_CONFIRMA
 
     detalle = "\n".join(f"#{r['id']}: {r['cantidad']}" for r in candidatas)
-    await update.message.reply_text(
+    await query.edit_message_text(
         f"Encontré varias reservas activas para este destino:\n{detalle}\n\n"
         'Escribe el número de la que corresponde, o escribe "ninguna".'
     )
     return S_RESERVA_ELEGIR
+
+
+async def salida_destino_texto(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    datos = context.user_data["salida"]
+    datos["destino"] = update.message.text.strip()
+    await update.message.reply_text("¿Sale de almacén o es entrega directa?", reply_markup=_TECLADO_TIPO)
+    return S_TIPO
 
 
 async def salida_reserva_confirma(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -327,8 +376,10 @@ async def _procesar_nuevo_serial(update: Update, context: ContextTypes.DEFAULT_T
     cantidad_objetivo = datos["cantidad"]
 
     if serial in datos["series"]:
+        datos["duplicados"] = datos.get("duplicados", 0) + 1
         await update.message.reply_text(
-            f"⚠️ La serie {serial} ya la mandaste en esta misma salida. Verifica y manda la correcta."
+            f"⚠️ La serie {serial} ya la mandaste en esta misma salida. Verifica y manda la correcta.\n\n"
+            + _resumen_pendiente(datos)
         )
         return S_FOTOS
 
@@ -337,8 +388,10 @@ async def _procesar_nuevo_serial(update: Update, context: ContextTypes.DEFAULT_T
         ya_existe = await conn.fetchrow("SELECT despacho_id FROM series_panel WHERE serial = $1", serial)
 
     if ya_existe:
+        datos["duplicados"] = datos.get("duplicados", 0) + 1
         await update.message.reply_text(
-            f"⚠️ La serie {serial} ya fue registrada antes en otro despacho. Verifica el panel."
+            f"⚠️ La serie {serial} ya fue registrada antes en otro despacho. Verifica el panel.\n\n"
+            + _resumen_pendiente(datos)
         )
         return S_FOTOS
 
@@ -348,7 +401,8 @@ async def _procesar_nuevo_serial(update: Update, context: ContextTypes.DEFAULT_T
     if faltan > 0:
         # Sin mensaje aquí a propósito: se registra en silencio para no
         # llenar el chat de una confirmación por cada foto. La lista
-        # completa se muestra de una sola vez al terminar.
+        # completa se muestra de una sola vez al terminar, y también
+        # cada vez que hay un duplicado (ver _resumen_pendiente).
         return S_FOTOS
 
     lista_series = "\n".join(datos["series"])
@@ -356,6 +410,23 @@ async def _procesar_nuevo_serial(update: Update, context: ContextTypes.DEFAULT_T
         f"✅ Se leyeron las {cantidad_objetivo} series:\n{lista_series}\n\nEscribe /listo para continuar."
     )
     return S_FOTOS
+
+
+def _resumen_pendiente(datos: dict) -> str:
+    """Lista de series ya capturadas y cuántas faltan, para que la persona
+    pueda comparar contra sus fotos y ubicar el panel que le falta."""
+    cantidad_objetivo = datos["cantidad"]
+    series = datos["series"]
+    faltan = cantidad_objetivo - len(series)
+    lista = "\n".join(series) if series else "(ninguna todavía)"
+    duplicados = datos.get("duplicados", 0)
+    texto = (
+        f"📋 Salida pendiente de validar — llevas {len(series)}/{cantidad_objetivo}:\n{lista}\n\n"
+        f"Te falta{'n' if faltan != 1 else ''} {faltan} serie{'s' if faltan != 1 else ''}."
+    )
+    if duplicados:
+        texto += f" (duplicados detectados hasta ahora: {duplicados})"
+    return texto
 
 
 async def salida_foto(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -592,7 +663,9 @@ def construir_salida_handler() -> ConversationHandler:
             S_MODELO: [CallbackQueryHandler(salida_modelo, pattern="^smodelo_")],
             S_POTENCIA: [CallbackQueryHandler(salida_potencia, pattern="^spot_")],
             S_CANTIDAD: [MessageHandler(filters.TEXT & ~filters.COMMAND, salida_cantidad)],
-            S_DESTINO: [MessageHandler(filters.TEXT & ~filters.COMMAND, salida_destino)],
+            S_DESTINO_RESERVADO: [CallbackQueryHandler(salida_destino_reservado, pattern="^sreservado_")],
+            S_DESTINO_PROYECTO: [CallbackQueryHandler(salida_destino_proyecto, pattern="^sproy_")],
+            S_DESTINO_TEXTO: [MessageHandler(filters.TEXT & ~filters.COMMAND, salida_destino_texto)],
             S_RESERVA_CONFIRMA: [CallbackQueryHandler(salida_reserva_confirma, pattern="^sresc_")],
             S_RESERVA_ELEGIR: [MessageHandler(filters.TEXT & ~filters.COMMAND, salida_reserva_elegir)],
             S_TIPO: [CallbackQueryHandler(salida_tipo, pattern="^stipo_")],
