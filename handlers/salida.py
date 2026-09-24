@@ -25,6 +25,7 @@ Las series quedan guardadas para el historial de garantía.
 import logging
 from datetime import datetime, date
 
+import asyncpg
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     ContextTypes, ConversationHandler, CommandHandler, MessageHandler, filters, CallbackQueryHandler,
@@ -537,11 +538,31 @@ async def salida_confirmar(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         """,
                         serial, despacho_id, marca, modelo, potencia,
                     )
+    except asyncpg.UniqueViolationError:
+        logger.warning("Serie duplicada al confirmar salida (reserva=%s)", datos.get("reserva_id"))
+        async with pool.acquire() as conn:
+            filas_dup = await conn.fetch(
+                "SELECT serial FROM series_panel WHERE serial = ANY($1::text[])", datos["series"]
+            )
+        repetidas = {f["serial"] for f in filas_dup}
+        buenas = [s for s in datos["series"] if s not in repetidas]
+        datos["series"] = buenas
+        lista_repetidas = "\n".join(repetidas) if repetidas else "(no logré identificar cuál — vuelve a intentar)"
+        texto = (
+            f"⚠️ Esta(s) serie(s) ya estaban registradas en otro despacho, así que no se guardó nada "
+            f"todavía:\n{lista_repetidas}\n\n"
+        )
+        if buenas:
+            texto += f"Las demás están bien y se conservan:\n{chr(10).join(buenas)}\n\n"
+        faltan = cantidad - len(buenas)
+        texto += f"Manda {faltan} foto(s) más para reemplazar la(s) repetida(s), y luego /listo de nuevo."
+        await query.edit_message_text(texto)
+        return S_FOTOS
     except Exception:
         logger.exception("Fallo confirmando la salida (reserva=%s)", datos.get("reserva_id"))
         await query.edit_message_text(
-            "⚠️ Ocurrió un error guardando el despacho (puede que alguna serie ya exista). "
-            "Nada se descontó del inventario. Intenta de nuevo con /salida."
+            "⚠️ Ocurrió un error guardando el despacho. Nada se descontó del inventario. "
+            "Intenta de nuevo con /salida."
         )
         context.user_data.pop("salida", None)
         return ConversationHandler.END
