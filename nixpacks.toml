@@ -1,10 +1,15 @@
 # Railway usa Nixpacks para construir el proyecto automáticamente a
-# partir de requirements.txt.
+# partir de requirements.txt. pytesseract es solo un envoltorio en
+# Python — necesita el binario real de Tesseract instalado en el
+# sistema, y esta es la forma de pedírselo a Nixpacks.
 #
-# - tesseract-ocr va por apt (venía funcionando bien así).
-# - zbar va por Nix en vez de apt, separado de tesseract — cuando los
-#   pusimos juntos en la misma instalación de apt, un problema con el
-#   nombre/repositorio de zbar hizo que NINGUNO de los dos se instalara.
+# Nota: se intentó agregar zbar (para leer código de barras, más
+# confiable que el texto) por apt y por Nix, pero en este entorno
+# ninguna de las dos formas logró instalarlo, y mezclarlo con esta
+# configuración incluso rompía la instalación de tesseract-ocr. Se
+# volvió a la configuración simple que sí funciona. El bot sigue
+# intentando leer código de barras primero (por si en algún momento
+# la librería aparece disponible), y cae a Tesseract si no la
+# encuentra — ver handlers/ocr.py.
 [phases.setup]
 aptPkgs = ["tesseract-ocr"]
-nixPkgs = ["zbar"]
