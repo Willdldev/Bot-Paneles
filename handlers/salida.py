@@ -571,7 +571,7 @@ async def salida_confirmar(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 reserva_id = datos.get("reserva_id")
                 if reserva_id:
                     reserva_fila = await conn.fetchrow(
-                        "SELECT estado_despacho FROM reservas WHERE id = $1 FOR UPDATE", reserva_id
+                        "SELECT cantidad, estado_despacho FROM reservas WHERE id = $1 FOR UPDATE", reserva_id
                     )
                     if reserva_fila is None or reserva_fila["estado_despacho"] == "despachada":
                         await query.edit_message_text(
@@ -585,8 +585,19 @@ async def salida_confirmar(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         "WHERE marca ILIKE $2 AND modelo ILIKE $3 AND potencia_w = $4",
                         cantidad, marca, modelo, potencia,
                     )
+                    # La reserva solo pasa a "despachada" cuando lo acumulado
+                    # (despachos anteriores + este) cubre el total pedido —
+                    # antes se marcaba despachada con solo UN despacho, sin
+                    # importar si era parcial, y la reserva desaparecía de
+                    # /reservas aunque todavía le quedaran paneles por salir.
+                    despachado_previo = await conn.fetchval(
+                        "SELECT COALESCE(SUM(cantidad_declarada), 0) FROM despachos WHERE reserva_id = $1",
+                        reserva_id,
+                    )
+                    despachado_total = despachado_previo + cantidad
+                    nuevo_estado = "despachada" if despachado_total >= reserva_fila["cantidad"] else "parcial"
                     await conn.execute(
-                        "UPDATE reservas SET estado_despacho = 'despachada' WHERE id = $1", reserva_id
+                        "UPDATE reservas SET estado_despacho = $2 WHERE id = $1", reserva_id, nuevo_estado
                     )
 
                 despacho_id = await conn.fetchval(
