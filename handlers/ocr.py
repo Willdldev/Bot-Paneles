@@ -1,27 +1,27 @@
 """
 Lee el número de serie de la foto de una etiqueta de panel.
 
-Primero intenta decodificar el código de barras directamente (pyzbar) —
-si la librería del sistema está disponible, es lo más confiable. Como
-respaldo, usa EasyOCR — un lector de texto 100% Python/pip (basado en
-PyTorch), que no depende de instalar ningún binario en el sistema como
-pasaba con Tesseract (eso fue justo la fuente de varios problemas de
-despliegue en Railway).
+Primero intenta decodificar el código de barras con zxing-cpp — una
+librería de lectura de códigos que viene compilada dentro del propio
+paquete de Python, sin depender de instalar nada en el sistema (a
+diferencia de pyzbar/libzbar, que nunca logramos hacer funcionar en
+Railway). Se prueba la foto completa y unos pocos recortes centrados,
+ya que el código de barras se lee casi al instante (una fracción de
+segundo) cuando ocupa una porción razonable del recorte — y probar
+varios recortes sigue siendo mucho más rápido que EasyOCR.
 
-EasyOCR es más lento que Tesseract, así que la imagen se reduce antes
-de procesarla (1200px de lado mayor da un buen balance entre velocidad
-y precisión, confirmado con fotos reales) y la inferencia corre en un
-hilo aparte para no congelar el bot mientras procesa.
+Solo si ningún recorte trae un código de barras se usa EasyOCR (lector
+de texto en Python puro, más lento pero más tolerante quando el código
+no se ve bien o la foto es de mala calidad) como respaldo.
 """
 import asyncio
-import ctypes
-import ctypes.util
 import io
 import logging
 import re
 import threading
 
 import numpy as np
+import zxingcpp
 from PIL import Image
 
 logger = logging.getLogger(__name__)
@@ -30,47 +30,28 @@ _PATRON_SERIAL = re.compile(r"[A-Z0-9]{8,}")
 _LADO_MAYOR_MAXIMO = 1200
 
 
-def _cargar_libzbar():
-    """
-    pyzbar solo sabe pedirle la librería a ctypes.util.find_library(),
-    que en varios entornos de contenedores no encuentra bibliotecas
-    recién instaladas. Probamos rutas conocidas de Linux como respaldo.
-    """
-    candidatos = [
-        ctypes.util.find_library("zbar"),
-        "libzbar.so.0",
-        "/usr/lib/x86_64-linux-gnu/libzbar.so.0",
-        "/usr/lib/aarch64-linux-gnu/libzbar.so.0",
-        "/lib/x86_64-linux-gnu/libzbar.so.0",
-        "/usr/lib/libzbar.so.0",
-        "/usr/local/lib/libzbar.so.0",
-    ]
-    ultimo_error = None
-    for candidato in candidatos:
-        if not candidato:
-            continue
-        try:
-            return ctypes.cdll.LoadLibrary(candidato)
-        except OSError as error:
-            ultimo_error = error
-            continue
-    raise ImportError(f"No se pudo cargar libzbar desde ninguna ruta conocida: {ultimo_error}")
+def _recortes_a_probar(imagen: Image.Image):
+    """La imagen completa primero, luego unos pocos recortes centrados
+    cada vez más cerrados — cada intento cuesta una fracción de
+    segundo, y entre todos cubren la mayoría de fotos donde la
+    etiqueta no llena todo el cuadro."""
+    ancho, alto = imagen.size
+    yield imagen
+    for fraccion in (0.7, 0.5, 0.35):
+        mx, my = int(ancho * (1 - fraccion) / 2), int(alto * (1 - fraccion) / 2)
+        yield imagen.crop((mx, my, ancho - mx, alto - my))
+    yield imagen.crop((0, 0, ancho, alto // 2))
+    yield imagen.crop((0, alto // 2, ancho, alto))
 
 
-try:
-    import pyzbar.zbar_library as _zbar_library
-
-    _zbar_library.load = lambda: (_cargar_libzbar(), [])
-    from pyzbar.pyzbar import decode as decodificar_barras
-    _ZBAR_DISPONIBLE = True
-except Exception:
-    logger.warning(
-        "No se pudo cargar la librería zbar — la lectura de series seguirá "
-        "funcionando solo con EasyOCR (algo más lenta, pero no depende de "
-        "ningún binario del sistema)."
-    )
-    decodificar_barras = None
-    _ZBAR_DISPONIBLE = False
+def _leer_codigo_de_barras(imagen: Image.Image) -> str | None:
+    for recorte in _recortes_a_probar(imagen):
+        resultados = zxingcpp.read_barcodes(recorte)
+        if resultados:
+            valor = resultados[0].text.strip().upper()
+            if valor:
+                return valor
+    return None
 
 
 _lector_ocr = None
@@ -92,8 +73,7 @@ def _obtener_lector():
 
 async def precargar_lector():
     """Se llama una vez al arrancar el bot, para que el modelo ya esté
-    cargado antes de que llegue la primera foto (si no, la primera
-    persona que use /salida tendría que esperar la descarga)."""
+    cargado antes de que llegue la primera foto."""
     await asyncio.to_thread(_obtener_lector)
 
 
@@ -114,30 +94,28 @@ def _mejor_candidato(fragmentos: list[str]) -> str | None:
     return max(candidatos, key=len)
 
 
-def _leer_con_easyocr_sync(imagen: Image.Image) -> list[str]:
+def _leer_con_easyocr(imagen: Image.Image) -> list[str]:
     lector = _obtener_lector()
-    imagen_reducida = _reducir_imagen(imagen.convert("RGB"))
+    imagen_reducida = _reducir_imagen(imagen)
     return lector.readtext(np.array(imagen_reducida), detail=0)
+
+
+def _leer_serie_sync(imagen: Image.Image) -> str | None:
+    """Corre en un hilo aparte para no congelar el bot. Primero código
+    de barras (rápido); si no aparece ninguno, EasyOCR (lento)."""
+    valor = _leer_codigo_de_barras(imagen)
+    if valor:
+        return valor
+    fragmentos = _leer_con_easyocr(imagen)
+    return _mejor_candidato(fragmentos)
 
 
 async def extraer_serie(imagen_bytes: bytes) -> str | None:
     """Devuelve el número de serie en mayúsculas, o None si no se pudo
     leer con confianza (ni por código de barras ni por texto)."""
     try:
-        imagen = Image.open(io.BytesIO(imagen_bytes))
-
-        # 1) Código de barras primero — mucho más confiable y más rápido.
-        if _ZBAR_DISPONIBLE:
-            codigos = decodificar_barras(imagen)
-            if codigos:
-                valor = codigos[0].data.decode("utf-8", errors="ignore").strip().upper()
-                if valor:
-                    return valor
-
-        # 2) Respaldo: leer el texto impreso con EasyOCR, en un hilo
-        # aparte para no congelar el bot mientras procesa.
-        fragmentos = await asyncio.to_thread(_leer_con_easyocr_sync, imagen)
-        return _mejor_candidato(fragmentos)
+        imagen = Image.open(io.BytesIO(imagen_bytes)).convert("RGB")
+        return await asyncio.to_thread(_leer_serie_sync, imagen)
     except Exception:
         logger.exception("Fallo leyendo la serie del panel.")
         return None
