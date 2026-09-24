@@ -8,6 +8,7 @@ from config import (
     COMERCIAL_GROUP_ID, ALMACEN_GROUP_ID, VALIDACION_GROUP_ID, SALIDA_GROUP_ID, PRUEBAS_GROUP_ID,
 )
 from db import init_schema
+from handlers.ocr import precargar_lector
 from security.guardian import guardian_global
 from handlers import admin, inventario, comercial, almacen, salida, danos
 
@@ -73,6 +74,8 @@ async def _post_init(application: Application):
     logger.info("Esquema de base de datos verificado/creado.")
     await _configurar_menus_comandos(application)
     logger.info("Menús de comandos configurados.")
+    await precargar_lector()
+    logger.info("Modelo de lectura de series (EasyOCR) precargado.")
 
 
 def main():
