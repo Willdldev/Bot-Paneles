@@ -345,15 +345,15 @@ async def _procesar_nuevo_serial(update: Update, context: ContextTypes.DEFAULT_T
     faltan = cantidad_objetivo - len(datos["series"])
 
     if faltan > 0:
-        await update.message.reply_text(
-            f"✅ Serie registrada: {serial} ({len(datos['series'])}/{cantidad_objetivo})"
-        )
-    else:
-        lista_series = "\n".join(datos["series"])
-        await update.message.reply_text(
-            f"✅ Serie registrada: {serial} ({len(datos['series'])}/{cantidad_objetivo})\n\n"
-            f"Ya tienes las {cantidad_objetivo} series:\n{lista_series}\n\nEscribe /listo para continuar."
-        )
+        # Sin mensaje aquí a propósito: se registra en silencio para no
+        # llenar el chat de una confirmación por cada foto. La lista
+        # completa se muestra de una sola vez al terminar.
+        return S_FOTOS
+
+    lista_series = "\n".join(datos["series"])
+    await update.message.reply_text(
+        f"✅ Se leyeron las {cantidad_objetivo} series:\n{lista_series}\n\nEscribe /listo para continuar."
+    )
     return S_FOTOS
 
 
