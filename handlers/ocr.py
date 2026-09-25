@@ -110,6 +110,36 @@ def _leer_serie_sync(imagen: Image.Image) -> str | None:
     return _mejor_candidato(fragmentos)
 
 
+def _todos_los_codigos_sync(imagen: Image.Image) -> list[str]:
+    """A diferencia de _leer_codigo_de_barras (que se detiene en el primer
+    código que encuentra), esta recorre TODOS los códigos de barras visibles
+    en la imagen — pensada para una foto de una hoja/packing list con varios
+    paneles a la vez, no para la foto de un solo panel."""
+    try:
+        resultados = zxingcpp.read_barcodes(imagen)
+    except Exception:
+        return []
+    vistos = set()
+    codigos = []
+    for r in resultados:
+        valor = r.text.strip().upper()
+        if valor and valor not in vistos:
+            vistos.add(valor)
+            codigos.append(valor)
+    return codigos
+
+
+async def extraer_codigos_de_barras(imagen_bytes: bytes) -> list[str]:
+    """Devuelve la lista de todos los códigos de barras distintos encontrados
+    en la foto (puede ser vacía, uno, o varios si es una hoja con muchos)."""
+    try:
+        imagen = Image.open(io.BytesIO(imagen_bytes)).convert("RGB")
+        return await asyncio.to_thread(_todos_los_codigos_sync, imagen)
+    except Exception:
+        logger.exception("Fallo leyendo códigos de barras múltiples.")
+        return []
+
+
 async def extraer_serie(imagen_bytes: bytes) -> str | None:
     """Devuelve el número de serie en mayúsculas, o None si no se pudo
     leer con confianza (ni por código de barras ni por texto)."""

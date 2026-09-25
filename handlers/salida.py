@@ -33,7 +33,7 @@ from telegram.ext import (
 
 from security.groups import requiere_grupo, requiere_rol
 from db import get_pool
-from handlers.ocr import extraer_serie
+from handlers.ocr import extraer_serie, extraer_codigos_de_barras
 
 logger = logging.getLogger(__name__)
 
@@ -41,8 +41,8 @@ logger = logging.getLogger(__name__)
     S_FECHA, S_MARCA, S_MODELO, S_POTENCIA, S_CANTIDAD,
     S_DESTINO_RESERVADO, S_DESTINO_PROYECTO, S_DESTINO_TEXTO,
     S_RESERVA_CONFIRMA, S_RESERVA_ELEGIR, S_TIPO, S_DIRECTA_PROVEEDOR, S_DIRECTA_ORDEN,
-    S_ORIGEN, S_FOTOS, S_CONFIRMAR,
-) = range(16)
+    S_ORIGEN, S_FOTOS, S_FOTOS_BULK, S_CONFIRMAR,
+) = range(17)
 
 _TECLADO_TIPO = InlineKeyboardMarkup([[
     InlineKeyboardButton("Sale de almacén", callback_data="stipo_almacen"),
@@ -443,7 +443,22 @@ async def salida_foto(update: Update, context: ContextTypes.DEFAULT_TYPE):
     archivo = await context.bot.get_file(foto.file_id)
     imagen_bytes = bytes(await archivo.download_as_bytearray())
 
-    serial = await extraer_serie(imagen_bytes)
+    codigos = await extraer_codigos_de_barras(imagen_bytes)
+
+    if len(codigos) > 1:
+        # Foto de una hoja/packing list con varios paneles a la vez, no de
+        # un solo panel — se confirma aparte antes de agregarlos todos.
+        datos["_bulk_candidatos"] = codigos
+        lista = "\n".join(f"{i + 1}. {c}" for i, c in enumerate(codigos))
+        await update.message.reply_text(
+            f"Esta foto trae {len(codigos)} códigos — parece una hoja con varios paneles:\n{lista}\n\n"
+            'Si todos son de paneles, escribe "todas". Si alguno no corresponde a un panel '
+            "(por ejemplo el código del pallet o del contenedor), escribe su número — o varios "
+            'separados por coma — para excluirlo, ej: 37'
+        )
+        return S_FOTOS_BULK
+
+    serial = codigos[0] if codigos else await extraer_serie(imagen_bytes)
 
     if serial is None:
         await update.message.reply_text(
@@ -453,6 +468,73 @@ async def salida_foto(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return S_FOTOS
 
     return await _procesar_nuevo_serial(update, context, serial)
+
+
+async def salida_bulk_confirmar(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Confirma (o filtra) los códigos encontrados en una foto tipo hoja, y
+    los agrega todos de una vez con la misma validación que una foto normal."""
+    datos = context.user_data["salida"]
+    candidatos = datos.pop("_bulk_candidatos", [])
+    texto = update.message.text.strip().lower()
+
+    if texto not in ("todas", "todos", "si", "sí"):
+        excluir = set()
+        for parte in texto.replace(" ", "").split(","):
+            if parte.isdigit():
+                excluir.add(int(parte))
+        if not excluir:
+            await update.message.reply_text(
+                'No entendí. Escribe "todas" para aceptarlas todas, o el número (o números separados '
+                'por coma) de las que quieres excluir.'
+            )
+            datos["_bulk_candidatos"] = candidatos
+            return S_FOTOS_BULK
+        candidatos = [c for i, c in enumerate(candidatos, start=1) if i not in excluir]
+
+    cantidad_objetivo = datos["cantidad"]
+
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        filas_existentes = await conn.fetch(
+            "SELECT serial FROM series_panel WHERE serial = ANY($1::text[])", candidatos
+        )
+    ya_en_historial = {f["serial"] for f in filas_existentes}
+
+    agregadas, dup_lote, dup_historial, sobrantes = [], [], [], []
+    for serial in candidatos:
+        if len(datos["series"]) >= cantidad_objetivo:
+            sobrantes.append(serial)
+        elif serial in datos["series"]:
+            dup_lote.append(serial)
+        elif serial in ya_en_historial:
+            dup_historial.append(serial)
+        else:
+            datos["series"].append(serial)
+            agregadas.append(serial)
+
+    resumen = [f"De {len(candidatos)} códigos: {len(agregadas)} agregados."]
+    if dup_lote:
+        resumen.append(f"Repetidos en este mismo lote (no se agregaron de nuevo): {', '.join(dup_lote)}")
+    if dup_historial:
+        resumen.append(f"Ya estaban despachados de antes en otro despacho (no se agregaron): {', '.join(dup_historial)}")
+    if sobrantes:
+        resumen.append(
+            f"Sobraban {len(sobrantes)} porque ya se había completado la cantidad — no se usaron: "
+            + ", ".join(sobrantes)
+        )
+
+    faltan = cantidad_objetivo - len(datos["series"])
+    if faltan > 0:
+        resumen.append("")
+        resumen.append(_resumen_pendiente(datos))
+        await update.message.reply_text("\n".join(resumen))
+        return S_FOTOS
+
+    lista_series = "\n".join(datos["series"])
+    resumen.append("")
+    resumen.append(f"✅ Se completaron las {cantidad_objetivo} series:\n{lista_series}\n\nEscribe /listo para continuar.")
+    await update.message.reply_text("\n".join(resumen))
+    return S_FOTOS
 
 
 async def salida_texto_manual(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -688,6 +770,7 @@ def construir_salida_handler() -> ConversationHandler:
                 CommandHandler("listo", salida_listo),
                 MessageHandler(filters.TEXT & ~filters.COMMAND, salida_texto_manual),
             ],
+            S_FOTOS_BULK: [MessageHandler(filters.TEXT & ~filters.COMMAND, salida_bulk_confirmar)],
             S_CONFIRMAR: [CallbackQueryHandler(salida_confirmar, pattern="^salida_")],
         },
         fallbacks=[CommandHandler("cancelar", cancelar_salida)],
